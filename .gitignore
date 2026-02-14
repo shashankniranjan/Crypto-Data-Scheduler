@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+
+# Virtual environments
+.venv/
+.venv-airflow/
+venv/
+
+# Runtime files
+*.db
+*.sqlite
+*.sqlite3
+*.log
+*.parquet
+data/
+logs/
+airflow/logs/
+airflow/home/
+
+# IDE
+.idea/
+.vscode/
+
+# Mac
+.DS_Store
