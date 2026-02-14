@@ -1,29 +1,26 @@
-# Binance Minute Lake
+﻿# Binance Minute Lake
 
-Production-grade Python ingestion pipeline for Binance USD-M Futures (`UM`) 1-minute canonical dataset, aligned with `/Users/shashankniranjan/Documents/New project/REQUIREMENTS_ADDENDUM.md`.
+Binance Minute Lake is a production-grade, Python-native ingestion framework that locks in the 58-column canonical 1-minute view of USD-M futures via a blend of WebSocket, REST, and Vision sources. It codifies the Requirements Addendum (https://github.com/???) and provides tooling for hot polling, historical repair, and reliable delivery to parquet partitions.
 
-## Key features
+## Highlights
 
-- Mixed-frequency source normalization to 1-minute output rows.
-- Temperature-band strategy:
-  - Hot: WebSocket + REST
-  - Warm: REST
-  - Cold: Vision daily archives
-- Idempotent partition writing with atomic commit semantics.
-- SQLite state store for watermark and partition ledger.
-- Typed schema registry containing all 58 canonical columns.
-- Operational CLI for init, single run, and daemon poll loop.
+- **Hybrid ingestion:** WebSocket/REST for hot/warm and Vision daily zips for cold backfill.
+- **Consistency-first writes:** Atomic parquet commits with DQ validation and partition ledger tracking.
+- **Schema discipline:** Central metadata describes every column’s source, support class, and fill policy.
+- **Operational CLI:** `bml run-once`, `run-daemon`, and `backfill-*` commands plus Airflow orchestration.
 
-## Project layout
+## Workspace structure
 
-- `/Users/shashankniranjan/Documents/New project/src/binance_minute_lake/core`: config, constants, schema metadata, logging
-- `/Users/shashankniranjan/Documents/New project/src/binance_minute_lake/sources`: Vision and REST clients
-- `/Users/shashankniranjan/Documents/New project/src/binance_minute_lake/transforms`: minute aggregation and normalization
-- `/Users/shashankniranjan/Documents/New project/src/binance_minute_lake/state`: SQLite watermark + partition state
-- `/Users/shashankniranjan/Documents/New project/src/binance_minute_lake/writer`: parquet atomic writer
-- `/Users/shashankniranjan/Documents/New project/src/binance_minute_lake/pipeline`: orchestrator and poll loop
-- `/Users/shashankniranjan/Documents/New project/src/binance_minute_lake/cli`: Typer CLI
-- `/Users/shashankniranjan/Documents/New project/tests`: unit tests
+- `src/binance_minute_lake/core`: configuration, schema metadata, enums, logging helpers.
+- `src/binance_minute_lake/sources`: REST, Vision, websocket, metrics inspector, and related adapters.
+- `src/binance_minute_lake/transforms`: minute-builder logic that normalizes ticks/snapshots to the canonical view.
+- `src/binance_minute_lake/state`: SQLite watermark/partition store plus ledger APIs.
+- `src/binance_minute_lake/writer`: atomic parquet writer with content/schema hashing.
+- `src/binance_minute_lake/pipeline`: orchestrator, scan/backfill helpers, and live collector wiring.
+- `src/binance_minute_lake/cli`: Typer CLI for state inspection, ad-hoc runs, and audit-style backfills.
+- `airflow/`: DAGs, scripts, and docs for running the ingestion via Airflow.
+- `tests/`: targeted unit coverage for schema/enums/orchestrator/writer/validation behaviors.
+- `docs/`: implementation plan, requirements addendum, and future work notes.
 
 ## Quickstart
 
@@ -43,38 +40,33 @@ bml run-once
 bml run-daemon --poll-seconds 60
 bml show-watermark
 bml backfill-years --years 5
-bml backfill-range --start 2021-02-15T00:00:00+00:00 --end 2026-02-14T23:59:00+00:00
 bml backfill-years --years 5 --max-missing-hours 24
+bml backfill-range --start 2021-02-15T00:00:00+00:00 --end 2026-02-14T23:59:00+00:00
 ```
 
-Backfill commands now run a consistency audit over existing hour partitions and only repair missing/invalid hours.
+Each backfill command now performs a full consistency scan over existing partitions and repairs every gap it locates (capped via `--max-missing-hours` when requested).
 
-## Airflow UI
+## Airflow support
 
-Airflow is installed in a dedicated virtualenv and uses DAGs from `/Users/shashankniranjan/Documents/New project/airflow/dags`.
+Airflow runs inside `.venv-airflow`, uses SQLite metadata, and exposes two DAGs (`bml_minute_incremental` and `bml_historical_backfill`) that call `bml run-once` or the consistency backfill CLI respectively.
 
-Start scheduler:
+Start the scheduler:
 
 ```bash
 cd "/Users/shashankniranjan/Documents/New project"
 ./airflow/scripts/start_scheduler.sh
 ```
 
-Start webserver in another terminal:
+In another terminal, start the webserver:
 
 ```bash
 cd "/Users/shashankniranjan/Documents/New project"
 ./airflow/scripts/start_webserver.sh
 ```
 
-Open [http://localhost:8080](http://localhost:8080).
-
-Default login:
-
-- `admin`
-- `admin`
+Open [http://localhost:8080](http://localhost:8080) and log in with `admin` / `admin`.
 
 ## Notes
 
-- WebSocket collectors are optional in this baseline; live-only columns are populated as `NULL` when collector signals are unavailable.
-- Vision download and REST fetch are implemented with explicit contracts, retries, and source provenance metadata hooks.
+- WebSocket collectors are optional in this baseline; live-only fields stay `NULL` when no collector is attached.
+- Vision and REST downloads include retry backoff, rate-limit handling, and provenance logging so quality is traceable.
