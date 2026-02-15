@@ -32,6 +32,16 @@ bml run-once        # verify all components can run end-to-end
 PYTHONPATH=src bml run-forever  # poll every minute indefinitely (with rate limiting)
 ```
 
+**Quick command cheatsheet**
+
+- One-off minute: `PYTHONPATH=src bml run-once`
+- Continuous polling: `PYTHONPATH=src bml run-forever` (minute-aligned, throttled)
+- Bounded daemon: `bml run-daemon --poll-seconds 60`
+- Backfill recent days: `PYTHONPATH=src bml backfill-range --start <ISO> --end <ISO> [--max-missing-hours N]`
+- Backfill deep history: `PYTHONPATH=src bml backfill-years --years 5 --max-missing-hours 24 --sleep-seconds 0.05`
+- Inspect state: `bml show-watermark --symbol BTCUSDT`
+- Browse data in IntelliJ/DataGrip: `PYTHONPATH=src bml materialize-duckdb --db-path data/minute.duckdb` then open the DB and query the `minute` view.
+
 ### Environment checklist
 
 1. Install system dependencies listed in `REQUIREMENTS_ADDENDUM.md` (e.g., `libpq`, `rust` for `pyarrow` builds).
