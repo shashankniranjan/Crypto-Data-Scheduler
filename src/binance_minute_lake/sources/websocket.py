@@ -166,6 +166,15 @@ class LiveCollector:
     def snapshot_for_minute(self, minute_timestamp_ms: int) -> LiveMinuteFeatures | None:
         return None
 
+    def agg_trades_for_window(
+        self,
+        *,
+        symbol: str,
+        start_time: datetime,
+        end_time: datetime,
+    ) -> list[dict[str, object]]:
+        return []
+
 
 class DepthSyncError(RuntimeError):
     """Raised when depth diff continuity is broken."""
@@ -493,6 +502,9 @@ class LiveEventStore:
             )
             connection.execute("CREATE INDEX IF NOT EXISTS idx_ws_trade_event_time ON ws_trade_events(event_time)")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_ws_trade_arrival_time ON ws_trade_events(arrival_time)")
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_ws_trade_transact_time ON ws_trade_events(transact_time)"
+            )
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_consumer_heartbeats_minute_ts ON consumer_heartbeats(minute_ts)"
             )
@@ -930,6 +942,84 @@ class LiveEventStore:
             predicted_funding=None,
             next_funding_time=None,
         )
+
+    def agg_trades_for_window(
+        self,
+        *,
+        symbol: str,
+        start_timestamp_ms: int,
+        end_timestamp_ms: int,
+    ) -> list[dict[str, object]]:
+        symbol_upper = symbol.upper()
+        start_ms = int(start_timestamp_ms)
+        end_ms = int(end_timestamp_ms)
+
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT event_time, transact_time, raw_json
+                FROM ws_trade_events
+                WHERE symbol = ?
+                  AND COALESCE(transact_time, event_time, arrival_time) >= ?
+                  AND COALESCE(transact_time, event_time, arrival_time) < ?
+                ORDER BY COALESCE(transact_time, event_time, arrival_time) ASC
+                """,
+                (symbol_upper, start_ms, end_ms),
+            ).fetchall()
+
+        parsed_rows: list[dict[str, object]] = []
+        for event_time, transact_time, raw_json in rows:
+            payload: dict[str, Any] = {}
+            if isinstance(raw_json, str):
+                try:
+                    decoded = json.loads(raw_json)
+                except json.JSONDecodeError:
+                    decoded = {}
+                if isinstance(decoded, dict):
+                    payload = decoded
+
+            trade_time = _coerce_int(payload.get("T"))
+            if trade_time is None:
+                trade_time = _coerce_int(transact_time)
+            if trade_time is None:
+                trade_time = _coerce_int(payload.get("E"))
+            if trade_time is None:
+                trade_time = _coerce_int(event_time)
+            if trade_time is None:
+                continue
+
+            price = _coerce_float(payload.get("p"))
+            qty = _coerce_float(payload.get("q"))
+            if price is None or qty is None:
+                continue
+
+            maker_raw = payload.get("m")
+            if isinstance(maker_raw, bool):
+                is_buyer_maker = maker_raw
+            elif isinstance(maker_raw, (int, float)):
+                is_buyer_maker = bool(maker_raw)
+            elif isinstance(maker_raw, str):
+                is_buyer_maker = maker_raw.strip().lower() in {"1", "true", "t", "yes", "y"}
+            else:
+                continue
+
+            agg_trade_id = _coerce_int(payload.get("a"))
+            first_trade_id = _coerce_int(payload.get("f"))
+            last_trade_id = _coerce_int(payload.get("l"))
+
+            parsed_rows.append(
+                {
+                    "agg_trade_id": agg_trade_id if agg_trade_id is not None else -1,
+                    "price": price,
+                    "qty": qty,
+                    "first_trade_id": first_trade_id if first_trade_id is not None else -1,
+                    "last_trade_id": last_trade_id if last_trade_id is not None else -1,
+                    "transact_time": trade_time,
+                    "is_buyer_maker": is_buyer_maker,
+                }
+            )
+
+        return parsed_rows
 
 
 @dataclass(slots=True)
@@ -1424,6 +1514,23 @@ class InMemoryLiveCollector(LiveCollector):
                 predicted_funding=bucket.predicted_funding,
                 next_funding_time=bucket.next_funding_time,
             )
+
+    def agg_trades_for_window(
+        self,
+        *,
+        symbol: str,
+        start_time: datetime,
+        end_time: datetime,
+    ) -> list[dict[str, object]]:
+        if self._event_store is None:
+            return []
+        start_ms = int(start_time.astimezone(UTC).timestamp() * 1000)
+        end_ms = int(end_time.astimezone(UTC).timestamp() * 1000)
+        return self._event_store.agg_trades_for_window(
+            symbol=symbol,
+            start_timestamp_ms=start_ms,
+            end_timestamp_ms=end_ms,
+        )
 
     @staticmethod
     def _depth_degraded_for_bucket(bucket: _MinuteAccumulator) -> bool:

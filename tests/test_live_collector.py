@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -258,3 +258,76 @@ def test_snapshot_recovers_live_features_from_event_store(tmp_path: Path) -> Non
     assert recovered.liq_short_count == 0
     assert recovered.liq_unfilled_supported is True
     assert recovered.liq_unfilled_ratio == pytest.approx(0.25)
+
+
+def test_live_collector_reads_agg_trades_from_event_store_window(tmp_path: Path) -> None:
+    store = LiveEventStore(tmp_path / "live_events.sqlite")
+    collector = InMemoryLiveCollector(event_store=store, symbol="BTCUSDT")
+    minute_dt = datetime(2026, 1, 15, 10, 0, tzinfo=UTC)
+    minute = floor_to_minute_ms(_ms(minute_dt))
+
+    collector.ingest_trade_event(
+        symbol="BTCUSDT",
+        event_time=minute + 10_000,
+        transact_time=minute + 9_900,
+        arrival_time=minute + 10_010,
+        raw_payload={
+            "e": "aggTrade",
+            "E": minute + 10_000,
+            "T": minute + 9_900,
+            "a": 123,
+            "f": 1000,
+            "l": 1001,
+            "p": "104000.5",
+            "q": "0.25",
+            "m": True,
+        },
+    )
+    collector.ingest_trade_event(
+        symbol="BTCUSDT",
+        event_time=minute + 20_000,
+        transact_time=minute + 19_900,
+        arrival_time=minute + 20_010,
+        raw_payload={
+            "e": "aggTrade",
+            "E": minute + 20_000,
+            "T": minute + 19_900,
+            "a": 124,
+            "f": 1002,
+            "l": 1003,
+            "p": "104001.0",
+            "q": "0.10",
+            "m": False,
+        },
+    )
+    collector.ingest_trade_event(
+        symbol="BTCUSDT",
+        event_time=minute + 90_000,
+        transact_time=minute + 89_900,
+        arrival_time=minute + 90_010,
+        raw_payload={
+            "e": "aggTrade",
+            "E": minute + 90_000,
+            "T": minute + 89_900,
+            "a": 125,
+            "f": 1004,
+            "l": 1005,
+            "p": "104100.0",
+            "q": "0.05",
+            "m": True,
+        },
+    )
+
+    rows = collector.agg_trades_for_window(
+        symbol="BTCUSDT",
+        start_time=minute_dt,
+        end_time=minute_dt + timedelta(minutes=1),
+    )
+
+    assert len(rows) == 2
+    assert rows[0]["transact_time"] == minute + 9_900
+    assert rows[0]["price"] == 104000.5
+    assert rows[0]["qty"] == 0.25
+    assert rows[0]["is_buyer_maker"] is True
+    assert rows[1]["transact_time"] == minute + 19_900
+    assert rows[1]["is_buyer_maker"] is False

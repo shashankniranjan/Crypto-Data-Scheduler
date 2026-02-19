@@ -382,7 +382,11 @@ class MinuteIngestionPipeline:
                 if not klines:
                     klines = self._rest.fetch_klines(self._settings.symbol, window_start, window_end_inclusive)
                 if not agg_trades:
-                    agg_trades = self._fetch_agg_trades_paginated(window_start, window_end_inclusive)
+                    agg_trades = self._fetch_agg_trades_live_or_rest(
+                        window_start,
+                        window_end_inclusive,
+                        allow_rest_fallback=True,
+                    )
                 if not mark_klines:
                     mark_klines = self._rest.fetch_mark_price_klines(
                         self._settings.symbol, window_start, window_end_inclusive
@@ -399,7 +403,11 @@ class MinuteIngestionPipeline:
             index_klines = self._rest.fetch_index_price_klines(
                 self._settings.symbol, window_start, window_end_inclusive
             )
-            agg_trades = self._fetch_agg_trades_paginated(window_start, window_end_inclusive)
+            agg_trades = self._fetch_agg_trades_live_or_rest(
+                window_start,
+                window_end_inclusive,
+                allow_rest_fallback=(band == IngestionBand.HOT),
+            )
             # Anchor snapshots to window_start so forward-fill can populate the full hour window.
             book_ticker_snapshots = []
             try:
@@ -557,6 +565,24 @@ class MinuteIngestionPipeline:
             time.sleep(0.05)
 
         return all_rows
+
+    def _fetch_agg_trades_live_or_rest(
+        self,
+        window_start: datetime,
+        window_end: datetime,
+        *,
+        allow_rest_fallback: bool,
+    ) -> list[dict[str, object]]:
+        live_rows = self._live_collector.agg_trades_for_window(
+            symbol=self._settings.symbol,
+            start_time=window_start,
+            end_time=window_end,
+        )
+        if live_rows:
+            return live_rows
+        if not allow_rest_fallback:
+            return []
+        return self._fetch_agg_trades_paginated(window_start, window_end)
 
     def _fetch_ls_ratio_rows(
         self,
